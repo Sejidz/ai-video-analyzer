@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Frame Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #111827; /* bg-gray-900 */
+            color: #d1d5db; /* text-gray-300 */
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #1f2937; /* bg-gray-800 */ }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #4b5563; /* bg-gray-600 */ border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #6b7280; /* bg-gray-500 */ }
+        .spinner {
+            border: 2px solid #4b5563; /* border-gray-600 */
+            border-top-color: #3b82f6; /* border-blue-500 */
+            border-radius: 50%;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="p-4 md:p-8 font-sans">
+
+    <div class="max-w-7xl mx-auto grid gap-8">
+        <header class="text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-white">AI Video Frame Analyzer 🔬</h1>
+            <p class="text-gray-400 mt-2">Systematic frame-by-frame analysis with multiple perspectives using the Gemini API</p>
+        </header>
+
+        <section class="bg-gray-800 p-4 rounded-lg shadow-lg grid md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div class="flex flex-col">
+                <label for="apiKey" class="text-sm font-medium text-gray-400 mb-1">Gemini API Key</label>
+                <input type="password" id="apiKey" placeholder="Enter your API key" class="bg-gray-700 text-white rounded p-2 border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+            </div>
+            <div class="flex flex-col">
+                <label for="videoFile" class="text-sm font-medium text-gray-400 mb-1">Video File</label>
+                <input type="file" id="videoFile" accept="video/*" class="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer">
+            </div>
+            <div class="flex flex-col">
+                <label for="perspectiveSelect" class="text-sm font-medium text-gray-400 mb-1">Analysis Perspective</label>
+                <select id="perspectiveSelect" class="bg-gray-700 text-white rounded p-2 border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+                    <option value="objective">Objective Description</option>
+                    <option value="urban">Urban Planning Analysis</option>
+                    <option value="social">Social Dynamics Analysis</option>
+                    <option value="safety">Safety Assessment</option>
+                    <option value="accessibility">Accessibility Review</option>
+                    <option value="creative">Creative Fiction (First-Person Story)</option>
+                </select>
+            </div>
+            <div class="flex flex-col">
+                <button id="analyzeBtn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors duration-200">
+                    Analyze Video
+                </button>
+            </div>
+        </section>
+
+        <div id="statusIndicator" class="text-center font-medium p-3 rounded-lg bg-gray-800 text-gray-300 transition-all">
+             Awaiting configuration...
+        </div>
+
+        <main class="grid lg:grid-cols-2 gap-8">
+            <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
+                <h2 class="text-xl font-bold text-white mb-4">Video Player</h2>
+                <video id="videoPlayer" class="w-full rounded bg-black" controls></video>
+                <canvas id="frameCanvas" class="hidden"></canvas>
+            </div>
+
+            <div class="bg-gray-800 p-4 rounded-lg shadow-lg flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-white">Analysis Results</h2>
+                    <div class="flex gap-2">
+                        <button id="reanalyzeBtn" class="bg-purple-600 text-white font-bold py-1 px-3 rounded hover:bg-purple-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors duration-200 text-sm">Re-analyze</button>
+                        <button id="downloadBtn" class="bg-green-600 text-white font-bold py-1 px-3 rounded hover:bg-green-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors duration-200 text-sm">Download</button>
+                    </div>
+                </div>
+                <div id="resultsContainer" class="flex-grow h-96 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+                    </div>
+            </div>
+        </main>
+
+        <footer class="bg-gray-800 p-4 rounded-lg shadow-lg">
+            <h2 class="text-xl font-bold text-white mb-4">Debug Log</h2>
+            <div id="logContainer" class="h-40 bg-gray-900 rounded p-2 overflow-y-auto custom-scrollbar font-mono text-xs text-gray-400"></div>
+        </footer>
+    </div>
+    
+    <script type="importmap">
+    { "imports": { "@google/generative-ai": "https://esm.run/@google/generative-ai" } }
+    </script>
+    
+    <script type="module">
+        import { GoogleGenerativeAI } from "@google/generative-ai";
+
+        // --- UTILITY ---
+        const log = (message, type = 'INFO') => {
+            const logContainer = document.getElementById('logContainer');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            let color = 'text-gray-400';
+            if (type === 'SUCCESS') color = 'text-green-400';
+            if (type === 'ERROR') color = 'text-red-400';
+            if (type === 'WARN') color = 'text-yellow-400';
+            logEntry.innerHTML = `[${timestamp}] <span class="${color}">[${type}] ${message}</span>`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        };
+        
+        const setStatus = (message, isLoading = false) => {
+            const statusIndicator = document.getElementById('statusIndicator');
+            statusIndicator.innerHTML = `${isLoading ? '<div class="spinner inline-block mr-2"></div>' : ''}${message}`;
+        };
+
+        // --- CLASSES ---
+
+        /**
+         * Manages the Gemini API interactions and perspective-based prompts.
+         */
+        class APIManager {
+            constructor() {
+                this.apiKey = null;
+                this.genAI = null;
+                this.model = null;
+                this.prompts = {
+                    objective: "Describe what you see in this video frame. Be objective and factual.",
+                    urban: "Analyze this from an urban planning perspective: traffic flow, pedestrian infrastructure, accessibility features, public space design, and urban functionality.",
+                    social: "Analyze this from a sociological perspective: social interactions, group behavior, community dynamics, cultural patterns, and interpersonal relationships.",
+                    safety: "Analyze this from a safety perspective: identify potential hazards, risk factors, safety compliance issues, and protective measures.",
+                    accessibility: "Analyze this from an accessibility perspective: identify barriers, evaluate inclusive design features, assess mobility challenges, and note universal design elements.",
+                    creative: "Pick one person visible in this frame and create a brief, respectful first-person narrative from their perspective. What might they be thinking or experiencing? Label clearly as creative fiction."
+                };
+            }
+
+            initialize(apiKey) {
+                if (!apiKey) {
+                    log('API key is missing.', 'ERROR');
+                    return false;
+                }
+                this.apiKey = apiKey;
+                try {
+                    this.genAI = new GoogleGenerativeAI(this.apiKey);
+                    this.model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp"});
+                    log('Gemini API initialized successfully.', 'SUCCESS');
+                    return true;
+                } catch (error) {
+                    log(`Failed to initialize Gemini API: ${error.message}`, 'ERROR');
+                    return false;
+                }
+            }
+            
+            async analyzeFrame(base64Data, perspectiveKey = 'objective') {
+                if (!this.model) throw new Error("API Manager not initialized.");
+                
+                const prompt = this.prompts[perspectiveKey] || this.prompts.objective;
+                const imagePart = { inlineData: { data: base64Data.split(",")[1], mimeType: "image/jpeg" } };
+                
+                log(`Sending frame for '${perspectiveKey}' analysis...`);
+                try {
+                    const result = await this.model.generateContent([prompt, imagePart]);
+                    const response = await result.response;
+                    const text = response.text();
+                    log('Received analysis from API.', 'SUCCESS');
+                    return text;
+                } catch (error) {
+                    log(`API Error: ${error.message}`, 'ERROR');
+                    throw new Error(`API call failed: ${error.message}`);
+                }
+            }
+        }
+        
+        /**
+         * Manages the video player and file handling.
+         */
+        class VideoPlayer {
+            constructor(videoElementId, fileInputElementId) {
+                this.video = document.getElementById(videoElementId);
+                this.fileInput = document.getElementById(fileInputElementId);
+                this.isReady = false;
+                this.filename = 'video.mp4';
+                this.fileInput.addEventListener('change', this.loadFile.bind(this));
+                log('VideoPlayer initialized.');
+            }
+
+            loadFile(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const fileURL = URL.createObjectURL(file);
+                    this.video.src = fileURL;
+                    this.filename = file.name;
+                    this.video.onloadedmetadata = () => {
+                        this.isReady = true;
+                        log(`Video loaded: ${file.name} (${this.video.duration.toFixed(2)}s)`, 'SUCCESS');
+                        setStatus('Video loaded. Ready to analyze.');
+                    };
+                }
+            }
+            
+            seekTo(time) {
+                return new Promise((resolve) => {
+                    const onSeeked = () => {
+                        this.video.removeEventListener('seeked', onSeeked);
+                        resolve();
+                    };
+                    this.video.addEventListener('seeked', onSeeked);
+                    this.video.currentTime = time;
+                });
+            }
+        }
+        
+        /**
+         * Orchestrates the frame-by-frame analysis, re-analysis, and export process.
+         */
+        class FrameAnalyzer {
+            constructor(videoPlayer, apiManager, canvasId, resultsId) {
+                this.videoPlayer = videoPlayer;
+                this.apiManager = apiManager;
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.resultsContainer = document.getElementById(resultsId);
+                this.isAnalyzing = false;
+                this.capturedFrames = []; // Stores { time, frameDataUrl }
+                this.currentAnalysis = []; // Stores { timestamp, frameDataUrl, description }
+            }
+
+            captureFrame() {
+                this.canvas.width = this.videoPlayer.video.videoWidth;
+                this.canvas.height = this.videoPlayer.video.videoHeight;
+                this.ctx.drawImage(this.videoPlayer.video, 0, 0, this.canvas.width, this.canvas.height);
+                log(`Captured frame at ${this.videoPlayer.video.currentTime.toFixed(2)}s`);
+                return this.canvas.toDataURL('image/jpeg', 0.8);
+            }
+            
+            displayResult(timestamp, frameDataUrl, description) {
+                const resultElement = document.createElement('div');
+                resultElement.className = 'p-3 bg-gray-700 rounded-md flex items-start gap-4';
+                
+                // Add special label for creative fiction
+                const perspective = document.getElementById('perspectiveSelect').value;
+                let descriptionHtml = description.replace(/\n/g, '<br>');
+                if (perspective === 'creative') {
+                    descriptionHtml = `<strong class="text-purple-300">[Creative Fiction]</strong><br>${descriptionHtml}`;
+                }
+
+                resultElement.innerHTML = `
+                    <div class="flex-shrink-0">
+                        <img src="${frameDataUrl}" alt="Video frame at ${timestamp}" class="w-32 h-20 object-cover rounded">
+                        <p class="text-center text-xs font-mono mt-1">${timestamp}</p>
+                    </div>
+                    <p class="text-sm text-gray-300">${descriptionHtml}</p>
+                `;
+                this.resultsContainer.appendChild(resultElement);
+                this.resultsContainer.scrollTop = this.resultsContainer.scrollHeight;
+            }
+
+            async performAnalysis(perspective, framesToAnalyze) {
+                this.isAnalyzing = true;
+                this.resultsContainer.innerHTML = '';
+                this.currentAnalysis = [];
+                const totalFrames = framesToAnalyze.length;
+
+                try {
+                    for (let i = 0; i < totalFrames; i++) {
+                        const frame = framesToAnalyze[i];
+                        const progress = `(${i + 1}/${totalFrames})`;
+                        setStatus(`Analyzing frame at ${frame.time.toFixed(1)}s ${progress}`, true);
+
+                        const description = await this.apiManager.analyzeFrame(frame.frameDataUrl, perspective);
+                        const timestamp = new Date(frame.time * 1000).toISOString().substr(14, 5);
+                        
+                        this.currentAnalysis.push({ timestamp, frameDataUrl: frame.frameDataUrl, description });
+                        this.displayResult(timestamp, frame.frameDataUrl, description);
+                    }
+                    setStatus('Analysis complete! ✅', false);
+                    log('--- Analysis Finished Successfully ---', 'SUCCESS');
+                    document.getElementById('reanalyzeBtn').disabled = false;
+                    document.getElementById('downloadBtn').disabled = false;
+                } catch (error) {
+                    setStatus(`An error occurred: ${error.message}. Check logs for details.`, false);
+                    log(`Analysis stopped due to error: ${error.message}`, 'ERROR');
+                } finally {
+                    this.isAnalyzing = false;
+                }
+            }
+
+            async startAnalysis() {
+                if (this.isAnalyzing) return log('Analysis is already in progress.', 'WARN');
+                if (!this.videoPlayer.isReady) return setStatus('Please select a video file first.');
+                
+                const apiKey = document.getElementById('apiKey').value;
+                if (!this.apiManager.initialize(apiKey)) return setStatus('Failed to initialize API. Check your key.');
+
+                document.getElementById('reanalyzeBtn').disabled = true;
+                document.getElementById('downloadBtn').disabled = true;
+                this.capturedFrames = [];
+                this.videoPlayer.video.pause();
+                log('--- Starting Initial Frame Capture ---');
+
+                const interval = 5; // seconds
+                const duration = this.videoPlayer.video.duration;
+                const totalFrames = Math.floor(duration / interval) + 1;
+
+                for (let i = 0; i * interval <= duration; i++) {
+                    const time = i * interval;
+                    setStatus(`Capturing frame ${i + 1}/${totalFrames} at ${time.toFixed(1)}s...`, true);
+                    await this.videoPlayer.seekTo(time);
+                    const frameDataUrl = this.captureFrame();
+                    this.capturedFrames.push({ time, frameDataUrl });
+                }
+                
+                log('--- Frame Capture Complete. Starting Analysis ---');
+                const perspective = document.getElementById('perspectiveSelect').value;
+                await this.performAnalysis(perspective, this.capturedFrames);
+            }
+
+            async reanalyzeFrames() {
+                if (this.isAnalyzing) return log('Analysis is already in progress.', 'WARN');
+                if (this.capturedFrames.length === 0) return setStatus('No frames captured. Please run an initial analysis first.');
+                
+                log('--- Re-analyzing with New Perspective ---');
+                const perspective = document.getElementById('perspectiveSelect').value;
+                await this.performAnalysis(perspective, this.capturedFrames);
+            }
+
+            exportAnalysis() {
+                if (this.currentAnalysis.length === 0) {
+                    log('No analysis data to export.', 'WARN');
+                    return;
+                }
+                const perspectiveSelect = document.getElementById('perspectiveSelect');
+                const selectedOption = perspectiveSelect.options[perspectiveSelect.selectedIndex].text;
+
+                let content = `AI VIDEO ANALYSIS REPORT\n`;
+                content += `========================\n\n`;
+                content += `Video File: ${this.videoPlayer.filename}\n`;
+                content += `Analysis Timestamp: ${new Date().toLocaleString()}\n`;
+                content += `Analysis Perspective: ${selectedOption}\n`;
+                content += `Total Frames Analyzed: ${this.currentAnalysis.length}\n\n`;
+                content += `------------------------------------------------------------\n\n`;
+
+                this.currentAnalysis.forEach(item => {
+                    content += `[FRAME AT ${item.timestamp}]\n\n`;
+                    if (selectedOption.includes("Creative Fiction")) {
+                        content += `[Creative Fiction]\n`;
+                    }
+                    content += `${item.description}\n\n`;
+                    content += `------------------------------------------------------------\n\n`;
+                });
+
+                const blob = new Blob([content], { type: 'text/plain' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = `analysis-${this.videoPlayer.filename.split('.')[0]}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                log('Analysis report downloaded.', 'SUCCESS');
+            }
+        }
+        
+        // --- APPLICATION SETUP ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoPlayer = new VideoPlayer('videoPlayer', 'videoFile');
+            const apiManager = new APIManager();
+            const frameAnalyzer = new FrameAnalyzer(videoPlayer, apiManager, 'frameCanvas', 'resultsContainer');
+            
+            document.getElementById('analyzeBtn').addEventListener('click', () => frameAnalyzer.startAnalysis());
+            document.getElementById('reanalyzeBtn').addEventListener('click', () => frameAnalyzer.reanalyzeFrames());
+            document.getElementById('downloadBtn').addEventListener('click', () => frameAnalyzer.exportAnalysis());
+
+            document.getElementById('reanalyzeBtn').disabled = true;
+            document.getElementById('downloadBtn').disabled = true;
+            
+            log('Application initialized. Please provide API key and select a video.');
+        });
+    </script>
+</body>
+</html>

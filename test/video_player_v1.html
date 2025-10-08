@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTML5 Video Player</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        /* A subtle animation for UI elements appearing */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+
+        /* Custom scrollbar for the log container */
+        #logOutput::-webkit-scrollbar {
+            width: 8px;
+        }
+        #logOutput::-webkit-scrollbar-track {
+            background: #2d3748; /* gray-800 */
+        }
+        #logOutput::-webkit-scrollbar-thumb {
+            background: #4a5568; /* gray-600 */
+            border-radius: 4px;
+        }
+        #logOutput::-webkit-scrollbar-thumb:hover {
+            background: #718096; /* gray-500 */
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans flex items-center justify-center min-h-screen p-4">
+
+    <main class="w-full max-w-3xl mx-auto space-y-8">
+
+        <section id="uploaderSection" class="bg-gray-800 rounded-lg shadow-2xl p-8 text-center">
+            <h1 class="text-3xl font-bold mb-2 text-white">Simple Video Player</h1>
+            <p class="text-gray-400 mb-6">Select a local video file to begin.</p>
+            
+            <input type="file" id="fileInput" class="hidden" accept="video/*">
+            
+            <label for="fileInput" class="cursor-pointer bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-lg inline-block transition duration-300 transform hover:scale-105">
+                📁 Upload Video
+            </label>
+            
+            <p id="errorMessage" class="text-red-400 mt-4 h-5"></p>
+        </section>
+
+        <section id="playerSection" class="hidden bg-gray-800 rounded-lg shadow-2xl overflow-hidden">
+             <video id="videoPlayer" class="w-full h-auto" controls></video>
+        </section>
+
+        <section id="logSection" class="hidden">
+            <h2 class="text-xl font-semibold mb-3 text-gray-300">Event Log</h2>
+            <div id="logOutput" class="bg-gray-800 rounded-lg shadow-inner h-48 p-4 overflow-y-auto text-sm font-mono space-y-2">
+                </div>
+        </section>
+
+    </main>
+
+    <script>
+        // Wait for the DOM to be fully loaded before running the script
+        document.addEventListener('DOMContentLoaded', () => {
+
+            // --- DOM Element References ---
+            // Get references to all the interactive and dynamic elements in the HTML.
+            const fileInput = document.getElementById('fileInput');
+            const uploaderSection = document.getElementById('uploaderSection');
+            const playerSection = document.getElementById('playerSection');
+            const videoPlayer = document.getElementById('videoPlayer');
+            const logSection = document.getElementById('logSection');
+            const logOutput = document.getElementById('logOutput');
+            const errorMessage = document.getElementById('errorMessage');
+
+            // --- Logging Function ---
+            /**
+             * Creates and prepends a formatted log message to the log output container.
+             * @param {string} message - The message to log.
+             * @param {string} type - The type of log ('info', 'success', 'error', 'event').
+             */
+            const logMessage = (message, type = 'info') => {
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('p');
+                
+                // Set text color based on log type using Tailwind CSS classes
+                let colorClass = 'text-gray-400'; // Default for 'info'
+                if (type === 'success') colorClass = 'text-green-400';
+                if (type === 'error') colorClass = 'text-red-400';
+                if (type === 'event') colorClass = 'text-blue-400';
+                
+                logEntry.className = `whitespace-pre-wrap ${colorClass}`;
+                logEntry.innerHTML = `<span class="font-bold">${timestamp}:</span> ${message}`;
+                
+                // Prepend to show the latest log at the top
+                logOutput.prepend(logEntry);
+            };
+
+            // --- Event Listener for File Input ---
+            // This triggers when the user selects a file from their computer.
+            fileInput.addEventListener('change', (event) => {
+                const file = event.target.files[0];
+
+                if (!file) {
+                    logMessage('File selection was cancelled.', 'info');
+                    return;
+                }
+
+                logMessage(`File selected: "${file.name}"`, 'info');
+
+                // **File Type Validation**
+                // We check if the MIME type of the file starts with 'video/'.
+                if (!file.type.startsWith('video/')) {
+                    const errorMsg = 'Invalid file type. Please select a video.';
+                    errorMessage.textContent = errorMsg;
+                    logMessage(`${errorMsg} (Type: ${file.type})`, 'error');
+                    fileInput.value = ''; // Reset the input field
+                    return;
+                }
+                
+                // --- File Processing on Success ---
+                errorMessage.textContent = ''; // Clear any previous error messages
+                logMessage('File validation successful.', 'success');
+                
+                // Hide uploader and show player/log sections
+                uploaderSection.classList.add('hidden');
+                playerSection.classList.remove('hidden');
+                playerSection.classList.add('fade-in');
+                logSection.classList.remove('hidden');
+                logSection.classList.add('fade-in');
+
+                // Use URL.createObjectURL to create a temporary URL for the local file.
+                // This is a safe way to play local files without uploading them to a server.
+                const videoURL = URL.createObjectURL(file);
+                videoPlayer.src = videoURL;
+                
+                logMessage('Video source set. Loading...', 'info');
+            });
+
+            // --- Event Listeners for Video Player ---
+            // These listeners monitor the state of the video player and log its events.
+
+            videoPlayer.addEventListener('loadeddata', () => {
+                logMessage('Video data loaded successfully. Ready to play.', 'success');
+            });
+
+            videoPlayer.addEventListener('play', () => {
+                logMessage('Video playback started.', 'event');
+            });
+
+            videoPlayer.addEventListener('pause', () => {
+                logMessage('Video playback paused.', 'event');
+            });
+
+            videoPlayer.addEventListener('error', () => {
+                // This handles errors that might occur during video playback, like a corrupted file.
+                let errorText = 'An unknown video error occurred.';
+                switch (videoPlayer.error.code) {
+                    case MediaError.MEDIA_ERR_ABORTED:
+                        errorText = 'Video playback aborted by the user.';
+                        break;
+                    case MediaError.MEDIA_ERR_NETWORK:
+                        errorText = 'A network error caused the video download to fail.';
+                        break;
+                    case MediaError.MEDIA_ERR_DECODE:
+                        errorText = 'The video could not be decoded, it may be corrupted.';
+                        break;
+                    case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
+                        errorText = 'The video format is not supported.';
+                        break;
+                }
+                logMessage(errorText, 'error');
+            });
+            
+            // Initial log message when the application is ready.
+            logMessage('Application initialized. Waiting for user input.');
+
+        });
+    </script>
+</body>
+</html>

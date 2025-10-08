@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Video Frame Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom styles for better UX */
+        body {
+            background-color: #111827; /* bg-gray-900 */
+            color: #d1d5db; /* text-gray-300 */
+        }
+        /* Custom scrollbar for results and logs */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #1f2937; /* bg-gray-800 */
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #4b5563; /* bg-gray-600 */
+            border-radius: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; /* bg-gray-500 */
+        }
+        /* Simple spinner animation */
+        .spinner {
+            border: 2px solid #4b5563; /* border-gray-600 */
+            border-top-color: #3b82f6; /* border-blue-500 */
+            border-radius: 50%;
+            width: 1rem;
+            height: 1rem;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 font-sans">
+
+    <div class="max-w-7xl mx-auto grid gap-8">
+        <header class="text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-white">AI Video Frame Analyzer 🔬</h1>
+            <p class="text-gray-400 mt-2">Systematic frame-by-frame analysis using the Gemini API</p>
+        </header>
+
+        <section class="bg-gray-800 p-4 rounded-lg shadow-lg grid md:grid-cols-3 gap-4 items-center">
+            <div class="flex flex-col">
+                <label for="apiKey" class="text-sm font-medium text-gray-400 mb-1">Gemini API Key</label>
+                <input type="password" id="apiKey" placeholder="Enter your API key" class="bg-gray-700 text-white rounded p-2 border border-gray-600 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none">
+            </div>
+            <div class="flex flex-col">
+                <label for="videoFile" class="text-sm font-medium text-gray-400 mb-1">Video File</label>
+                <input type="file" id="videoFile" accept="video/*" class="text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-600 file:text-white hover:file:bg-blue-700">
+            </div>
+            <div class="flex flex-col items-center justify-end h-full">
+                 <button id="analyzeBtn" class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded hover:bg-blue-700 disabled:bg-gray-500 disabled:cursor-not-allowed transition-colors duration-200">
+                    Analyze Video
+                </button>
+            </div>
+        </section>
+        
+        <div id="statusIndicator" class="text-center font-medium p-3 rounded-lg bg-gray-800 text-gray-300 transition-all">
+             Awaiting configuration...
+        </div>
+
+        <main class="grid lg:grid-cols-2 gap-8">
+            <div class="bg-gray-800 p-4 rounded-lg shadow-lg">
+                <h2 class="text-xl font-bold text-white mb-4">Video Player</h2>
+                <video id="videoPlayer" class="w-full rounded bg-black" controls></video>
+                <canvas id="frameCanvas" class="hidden"></canvas> </div>
+
+            <div class="bg-gray-800 p-4 rounded-lg shadow-lg flex flex-col">
+                <h2 class="text-xl font-bold text-white mb-4">Analysis Results</h2>
+                <div id="resultsContainer" class="flex-grow h-96 overflow-y-auto custom-scrollbar pr-2 space-y-4">
+                    </div>
+            </div>
+        </main>
+
+        <footer class="bg-gray-800 p-4 rounded-lg shadow-lg">
+            <h2 class="text-xl font-bold text-white mb-4">Debug Log</h2>
+            <div id="logContainer" class="h-40 bg-gray-900 rounded p-2 overflow-y-auto custom-scrollbar font-mono text-xs text-gray-400"></div>
+        </footer>
+    </div>
+    
+    <script type="importmap">
+    {
+      "imports": {
+        "@google/generative-ai": "https://esm.run/@google/generative-ai"
+      }
+    }
+    </script>
+    
+    <script type="module">
+        import { GoogleGenerativeAI } from "@google/generative-ai";
+
+        // --- UTILITY ---
+        const log = (message, type = 'INFO') => {
+            const logContainer = document.getElementById('logContainer');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = document.createElement('div');
+            let color = 'text-gray-400';
+            if (type === 'SUCCESS') color = 'text-green-400';
+            if (type === 'ERROR') color = 'text-red-400';
+            if (type === 'WARN') color = 'text-yellow-400';
+            logEntry.innerHTML = `[${timestamp}] <span class="${color}">[${type}] ${message}</span>`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        };
+        
+        const setStatus = (message, isLoading = false) => {
+            const statusIndicator = document.getElementById('statusIndicator');
+            let icon = '';
+            if (isLoading) {
+                 icon = `<div class="spinner inline-block mr-2"></div>`;
+            }
+            statusIndicator.innerHTML = `${icon}${message}`;
+        };
+
+        // --- CLASSES ---
+
+        /**
+         * Manages the Gemini API interactions.
+         */
+        class APIManager {
+            constructor() {
+                this.apiKey = null;
+                this.genAI = null;
+                this.model = null;
+            }
+
+            initialize(apiKey) {
+                if (!apiKey) {
+                    log('API key is missing.', 'ERROR');
+                    return false;
+                }
+                this.apiKey = apiKey;
+                try {
+                    this.genAI = new GoogleGenerativeAI(this.apiKey);
+                    this.model = this.genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp"});
+                    //had problems with the selction of the model for generating images. The model 'gemini-2.0-flash-exp' is specified, but newer models like 'gemini-2.5-flash-preview-05-20' are generally recommended for new applications.
+                    log('Gemini API initialized successfully.', 'SUCCESS');
+                    return true;
+                } catch (error) {
+                    log(`Failed to initialize Gemini API: ${error.message}`, 'ERROR');
+                    return false;
+                }
+            }
+            
+            /**
+             * Analyzes a single frame image (in base64 format).
+             * @param {string} base64Data - The base64 encoded image data.
+             * @returns {Promise<string>} - The AI-generated description.
+             */
+            async analyzeFrame(base64Data) {
+                if (!this.model) {
+                    throw new Error("API Manager not initialized.");
+                }
+                
+                const prompt = "Describe what you see in this video frame. Be objective and factual.";
+                
+                // Convert base64 to a FilePart object for the API
+                const imagePart = {
+                    inlineData: {
+                        data: base64Data.split(",")[1], // Remove the "data:image/jpeg;base64," prefix
+                        mimeType: "image/jpeg",
+                    },
+                };
+                
+                log('Sending frame to Gemini API for analysis...');
+                try {
+                    const result = await this.model.generateContent([prompt, imagePart]);
+                    const response = await result.response;
+                    const text = response.text();
+                    log('Received analysis from API.', 'SUCCESS');
+                    return text;
+                } catch (error) {
+                    log(`API Error: ${error.message}`, 'ERROR');
+                    // This often happens due to safety settings or rate limiting.
+                    throw new Error(`API call failed: ${error.message}`);
+                }
+            }
+        }
+        
+        /**
+         * Manages the video player and file handling.
+         */
+        class VideoPlayer {
+            constructor(videoElementId, fileInputElementId) {
+                this.video = document.getElementById(videoElementId);
+                this.fileInput = document.getElementById(fileInputElementId);
+                this.isReady = false;
+
+                this.fileInput.addEventListener('change', this.loadFile.bind(this));
+                log('VideoPlayer initialized.');
+            }
+
+            loadFile(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const fileURL = URL.createObjectURL(file);
+                    this.video.src = fileURL;
+                    this.video.onloadedmetadata = () => {
+                        this.isReady = true;
+                        log(`Video loaded: ${file.name} (${this.video.duration.toFixed(2)}s)`, 'SUCCESS');
+                        setStatus('Video loaded. Ready to analyze.');
+                    };
+                }
+            }
+            
+            /**
+             * Seeks to a specific time in the video and returns a promise that resolves when seeking is complete.
+             * @param {number} time - The time in seconds to seek to.
+             * @returns {Promise<void>}
+             */
+            seekTo(time) {
+                return new Promise((resolve, reject) => {
+                    // This event listener ensures we capture the frame *after* the video has updated.
+                    const onSeeked = () => {
+                        this.video.removeEventListener('seeked', onSeeked);
+                        resolve();
+                    };
+                    this.video.addEventListener('seeked', onSeeked);
+                    this.video.currentTime = time;
+                });
+            }
+        }
+        
+        /**
+         * Orchestrates the frame-by-frame analysis process.
+         */
+        class FrameAnalyzer {
+            constructor(videoPlayer, apiManager, canvasId, resultsId) {
+                this.videoPlayer = videoPlayer;
+                this.apiManager = apiManager;
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d');
+                this.resultsContainer = document.getElementById(resultsId);
+                this.isAnalyzing = false;
+            }
+
+            /**
+             * Captures the current video frame onto the canvas and returns it as a base64 string.
+             * @returns {string} - The base64 encoded image data (JPEG format).
+             */
+            captureFrame() {
+                // Set canvas dimensions to match the video to avoid distortion
+                this.canvas.width = this.videoPlayer.video.videoWidth;
+                this.canvas.height = this.videoPlayer.video.videoHeight;
+                
+                // Draw the current video frame onto the canvas
+                this.ctx.drawImage(this.videoPlayer.video, 0, 0, this.canvas.width, this.canvas.height);
+                log(`Captured frame at ${this.videoPlayer.video.currentTime.toFixed(2)}s`);
+                
+                // Export the canvas content as a JPEG image in base64 format
+                return this.canvas.toDataURL('image/jpeg', 0.8); // 0.8 quality for smaller size
+            }
+            
+            /**
+             * Displays the analysis result (thumbnail and text) in the UI.
+             * @param {string} timestamp - Formatted time string (e.g., 00:05).
+             * @param {string} frameDataUrl - The base64 image data for the thumbnail.
+             * @param {string} description - The AI-generated description.
+             */
+            displayResult(timestamp, frameDataUrl, description) {
+                const resultElement = document.createElement('div');
+                resultElement.className = 'p-3 bg-gray-700 rounded-md flex items-start gap-4';
+                
+                resultElement.innerHTML = `
+                    <div class="flex-shrink-0">
+                        <img src="${frameDataUrl}" alt="Video frame at ${timestamp}" class="w-32 h-20 object-cover rounded">
+                        <p class="text-center text-xs font-mono mt-1">${timestamp}</p>
+                    </div>
+                    <p class="text-sm text-gray-300">${description.replace(/\n/g, '<br>')}</p>
+                `;
+                
+                this.resultsContainer.appendChild(resultElement);
+                this.resultsContainer.scrollTop = this.resultsContainer.scrollHeight; // Auto-scroll
+            }
+
+            async startAnalysis() {
+                if (this.isAnalyzing) {
+                    log('Analysis is already in progress.', 'WARN');
+                    return;
+                }
+                if (!this.videoPlayer.isReady) {
+                    setStatus('Please select a video file first.', false);
+                    log('Analysis aborted: Video not ready.', 'ERROR');
+                    return;
+                }
+                const apiKey = document.getElementById('apiKey').value;
+                if (!this.apiManager.initialize(apiKey)) {
+                    setStatus('Failed to initialize API. Check your key.', false);
+                    return;
+                }
+
+                this.isAnalyzing = true;
+                this.resultsContainer.innerHTML = ''; // Clear previous results
+                this.videoPlayer.video.pause();
+                log('--- Starting Video Analysis ---');
+
+                const interval = 5; // seconds
+                const duration = this.videoPlayer.video.duration;
+                const totalFrames = Math.floor(duration / interval) + 1;
+
+                try {
+                    for (let i = 0; i * interval <= duration; i++) {
+                        const time = i * interval;
+                        const progress = `(${i + 1}/${totalFrames})`;
+                        setStatus(`Seeking to ${time.toFixed(1)}s ${progress}`, true);
+                        
+                        // Wait for the video to seek to the correct position
+                        await this.videoPlayer.seekTo(time);
+                        
+                        // Capture the frame once seeking is complete
+                        setStatus(`Capturing frame at ${time.toFixed(1)}s ${progress}`, true);
+                        const frameData = this.captureFrame();
+                        
+                        // Analyze the frame using the API
+                        setStatus(`Analyzing frame at ${time.toFixed(1)}s ${progress}`, true);
+                        const description = await this.apiManager.analyzeFrame(frameData);
+                        
+                        // Display the result
+                        const timestamp = new Date(time * 1000).toISOString().substr(14, 5);
+                        this.displayResult(timestamp, frameData, description);
+                    }
+                    setStatus('Analysis complete! ✅', false);
+                    log('--- Analysis Finished Successfully ---', 'SUCCESS');
+                } catch (error) {
+                    setStatus(`An error occurred: ${error.message}. Check logs for details.`, false);
+                    log(`Analysis stopped due to error: ${error.message}`, 'ERROR');
+                } finally {
+                    this.isAnalyzing = false; // Ensure we can run analysis again
+                }
+            }
+        }
+        
+        // --- APPLICATION SETUP ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoPlayer = new VideoPlayer('videoPlayer', 'videoFile');
+            const apiManager = new APIManager();
+            const frameAnalyzer = new FrameAnalyzer(videoPlayer, apiManager, 'frameCanvas', 'resultsContainer');
+            
+            const analyzeBtn = document.getElementById('analyzeBtn');
+            analyzeBtn.addEventListener('click', () => frameAnalyzer.startAnalysis());
+            
+            log('Application initialized. Please provide API key and select a video.');
+        });
+
+    </script>
+</body>
+</html>
